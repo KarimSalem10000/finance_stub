@@ -1,6 +1,6 @@
 from flask_restx import Resource, fields, reqparse, Api
 from ext import db
-from models import Customer, LoanInfo, PaymentHistory
+from models import Customer, LoanInfo, PaymentHistory, LoanCustomerIds
 import random
 
 # Create a parser instance
@@ -28,8 +28,9 @@ def determine_apr(credit_score):
 def calculate_max_loan(annual_income):
     return annual_income * 0.1 * 3
 
-def calculate_monthly_payment(loan_amount, apr):
+def calculate_monthly_payment(loan_amount, apr):# (loan_amount,apr)
     return (loan_amount * (1 + apr)) / 36
+# apr =2.0
 
 customer_model = api.model('Customer', {
     'first_name': fields.String(required=True, description='First name'),
@@ -48,8 +49,9 @@ customer_model = api.model('Customer', {
 loaninfo_model = api.model('LoanInfo', {
     'customer_id': fields.Integer(required=True, description='Customer ID'),
     'requested_amount': fields.Float(required=True, description='Requested loan amount'),
+    'downpayment': fields.Float(required=True, description='Downpayment amount'),
     'monthly_payment': fields.Float(required=True, description='Monthly payment amount'),
-    'purpose': fields.String(description='Purpose of the loan'),
+    'balance': fields.Float(required=True, description='Remaining balance after payment'),
     'status': fields.String(description='Loan status')
 })
 
@@ -59,6 +61,11 @@ payment_model = api.model('Payment', {
     'payment_date': fields.DateTime(description='Date and time of payment'),
     'amount': fields.Float(required=True, description='Payment amount'),
     'balance': fields.Float(required=True, description='Remaining balance after payment')
+})
+
+loancustomer_model = api.model('LoanCustomer', {
+    'customer_id': fields.Integer(required=True, description='Customer ID'),
+    'loan_id': fields.Integer(required=True, description='Loan ID')
 })
 
 @ns.route('/credit-score')
@@ -79,7 +86,8 @@ class CreditScore(Resource):
         if customer:
             # Existing customer handling
             # Calculate the proposed new total loan amount
-            proposed_total_loan = customer.total_loan_amount + data['total_loan_amount']
+            proposed_total_loan = customer.total_loan_amount + data['loan_amount']
+            annual_income = data['annual_income']
             
             # Check if the new total exceeds the max loan amount
             if proposed_total_loan > customer.max_loan:
@@ -87,6 +95,7 @@ class CreditScore(Resource):
 
             # Update the customer's total loan amount
             customer.total_loan_amount = proposed_total_loan
+            customer.annual_income = annual_income
             
             # Update database entry
             db.session.commit()
@@ -151,19 +160,33 @@ class GetCustomer(Resource):
 class LoanInfoResource(Resource):
     @ns.expect(api.model('LoanInfo', {
         'customer_id': fields.Integer(required=True, description="Customer ID"),
-        'requested_amount': fields.Float(required=True, description="Requested loan amount")
+        'requested_amount': fields.Float(required=True, description="Requested loan amount"),
+        'downpayment': fields.Float(required=True, description="Downpayment amount")
         }))
     
     def post(self):
         data = api.payload
-        customer = Customer.query.filter_by(customer_id=data['customer_id']).first()
+        customer = Customer.query.filter_by(id=data['customer_id']).first()
+        proposed_total_loan = customer.total_loan_amount + data['requested_amount']
+        if proposed_total_loan > customer.max_loan:
+                return {"message": "Loan amount request exceeds your loan limit."}, 400
+
+            # Update the customer's total loan amount
+        customer.total_loan_amount = proposed_total_loan
         loan_info = LoanInfo(
             customer_id=data['customer_id'],
             requested_amount=data['requested_amount'],
-            monthly_payment=calculate_monthly_payment(data['requested_amount'], customer.apr),
+            downpayment=data['downpayment'],
+            monthly_payment=calculate_monthly_payment(data['requested_amount'], customer.apr),# customer.apr
             balance=data['requested_amount'],
             status='pending' )
         db.session.add(loan_info)
+        db.session.commit()
+        LoanCustomer_Ids = LoanCustomerIds(
+            customer_id=data['customer_id'],
+            loan_info_id=loan_info.id
+        )
+        db.session.add(LoanCustomer_Ids)
         db.session.commit()
         return {'message': 'Loan request created successfully', 'id': loan_info.id}, 201
 
@@ -178,29 +201,40 @@ class LoanInfoList(Resource):
 
 
 @ns.route('/payments')
-@ns.param('loan_info_id', 'Loan Request ID')
 class PaymentHistoryResource(Resource):
-    @ns.expect(api.model('PaymentEntry', {
+    @ns.expect(api.model('Payment', {
         'amount': fields.Float(required=True, description="Payment amount"),
+        'ssn': fields.String(required=True, description="Social Security Number of the customer making the payment")
     }))
-    def post(self, loan_info_id):
+    def post(self):
         data = api.payload
-        loan_info = LoanInfo.query.get_or_404(loan_info_id)
+        customer = Customer.query.filter_by(ssn=data['ssn']).first()
+        if not customer:
+            api.abort(404, "No customer found with the given SSN")
         
-        # Subtract the payment amount from the current balance
-        if loan_info.current_balance < data['amount']:
+        loan_info_id = LoanCustomerIds.query.filter_by(customer_id=customer.id).first().loan_info_id
+
+        loan_info = LoanInfo.query.filter_by(id=loan_info_id, customer_id=customer.id).first()
+        if not loan_info:
+            api.abort(404, "No loan information found with the given ID that matches the customer ID")
+
+        # Calculate new balance and check for payment issues
+        new_balance = loan_info.balance - data['amount']
+        if new_balance < 0:
             api.abort(400, "Payment amount exceeds current balance")
-        
-        new_balance = loan_info.current_balance - data['amount']
-        loan_info.current_balance = new_balance  # Update the loan request's current balance
-        
+
+        # Create and save the payment history
         payment_history = PaymentHistory(
             loan_info_id=loan_info_id,
             amount=data['amount'],
-            balance=new_balance  # Save the new balance after the payment
+            balance=new_balance # Assuming you're recording the payment timestamp
         )
         db.session.add(payment_history)
+
+        # Update loan_info's current balance
+        loan_info.balance = new_balance
         db.session.commit()
+
         return {'message': 'Payment recorded successfully', 'new_balance': new_balance}, 201
 
 @ns.route('/payment-history/<int:loan_info_id>')

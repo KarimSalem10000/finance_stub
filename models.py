@@ -31,7 +31,7 @@ class Customer(db.Model):
         }
     
     def __repr__(self):
-        return f"Customer('{self.first_name}', '{self.last_name}', '{self.ssn}', '{self.birth_date}', '{self.address}', '{self.credit_score}', '{self.apr}', '{self.annual_income}' , '{self.total_loan_amount}' , '{self.max_loan}')"
+        return f"Customer('{self.first_name}', '{self.last_name}', '{self.ssn}', '{self.birth_date}', '{self.address}', '{self.credit_score}', '{self.annual_income}' , '{self.total_loan_amount}' , '{self.max_loan}')"
 
     @validates('ssn')
     def validate_ssn(self, key, ssn):
@@ -79,6 +79,16 @@ class PaymentHistory(db.Model):
             'amount': self.amount,
             'balance': self.balance
         }
+class LoanCustomerIds(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
+    loan_info_id = db.Column(db.Integer, db.ForeignKey('loan_info.id'), nullable=False)
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'customer_id': self.customer_id,
+            'loan_info_id': self.loan_info_id
+        }
 
     
