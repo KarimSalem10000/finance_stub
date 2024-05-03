@@ -6,13 +6,13 @@ class Customer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     first_name = db.Column(db.String(50), nullable=False)
     last_name = db.Column(db.String(50), nullable=False)
-    ssn = db.Column(db.String(11), nullable=False, unique=True)
     birth_date = db.Column(db.String(10), nullable=False)
     address = db.Column(db.String(100), nullable=False)
     credit_score = db.Column(db.Integer, nullable=False)
     apr = db.Column(db.Float, nullable=False)
     annual_income = db.Column(db.Float, nullable=False)
     total_loan_amount = db.Column(db.Float, nullable=False)
+    monthly_payment = db.Column(db.Float, nullable=False)
     max_loan = db.Column(db.Float, nullable=False)
 
     def to_dict(self):
@@ -20,26 +20,18 @@ class Customer(db.Model):
             'id': self.id,
             'first_name': self.first_name,
             'last_name': self.last_name,
-            'ssn': self.ssn,
             'birth_date': self.birth_date,
             'address': self.address,
             'credit_score': self.credit_score,
             'apr': self.apr,
             'annual_income': self.annual_income,
             'total_loan_amount': self.total_loan_amount,
+            'monthly_payment': self.monthly_payment,
             'max_loan': self.max_loan
         }
     
     def __repr__(self):
-        return f"Customer('{self.first_name}', '{self.last_name}', '{self.ssn}', '{self.birth_date}', '{self.address}', '{self.credit_score}', '{self.annual_income}' , '{self.total_loan_amount}' , '{self.max_loan}')"
-
-    @validates('ssn')
-    def validate_ssn(self, key, ssn):
-        if len(ssn) != 9:
-            raise ValueError("SSN must be exactly 9 digits long")
-        if not ssn.isdigit():
-            raise ValueError("SSN must contain only digits")
-        return ssn
+        return f"Customer('{self.first_name}', '{self.last_name}', '{self.birth_date}', '{self.address}', '{self.credit_score}', '{self.annual_income}' , '{self.total_loan_amount}' ,'{self.monthly_payment}', '{self.max_loan}')"
 
 
 class LoanInfo(db.Model):

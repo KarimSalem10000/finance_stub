@@ -17,31 +17,34 @@ credit_scores = [350, 600, 600, 600, 600, 700, 700, 700, 800, 780, 720, 900]
 
 def determine_apr(credit_score):
     if credit_score < 500:
-        return 10.0
+        return 0.20
     elif credit_score < 700:
-        return 5.0
+        return 0.15
     elif credit_score < 800:
-        return 3.5
+        return 0.10
     else:
-        return 2.0
+        return 0.05
 
 def calculate_max_loan(annual_income):
     return annual_income * 0.1 * 3
 
-def calculate_monthly_payment(loan_amount, apr):# (loan_amount,apr)
-    return (loan_amount * (1 + apr)) / 36
+def calculate_monthly_payment(loan_amount, apr):
+    monthly_interest_rate = apr / 12
+    total_payments =  36
+    return loan_amount * (monthly_interest_rate * (1 + monthly_interest_rate) ** total_payments) / ((1 + monthly_interest_rate) ** total_payments - 1)
+
 # apr =2.0
 
 customer_model = api.model('Customer', {
     'first_name': fields.String(required=True, description='First name'),
     'last_name': fields.String(required=True, description='Last name'),
-    'ssn': fields.String(required=True, description='Social Security Number'),
     'birth_date': fields.String(required=True, description='Date of Birth'),
     'address': fields.String(required=True, description='Address'),
     'credit_score': fields.Integer(description='Credit Score', required=False),  # Not required if generated
     'apr': fields.Float(description='Annual Percentage Rate', required=False),  # Not required if calculated
     'annual_income': fields.Float(description='Anual Income', required=False),  # Not required if provided
     'total_loan_amount': fields.Float(description='Total Loan Amount', required=True),  # Required field
+    'monthly_payment': fields.Float(description='Monthly Payment', required=False),  # Not required if calculated
     'max_loan': fields.Float(description='Max Loan', required=False)  # Not required if calculated
 
 })
@@ -73,7 +76,6 @@ class CreditScore(Resource):
     @ns.expect(api.model('Customer', {
         'first_name': fields.String(required=True, description='First name'),
         'last_name': fields.String(required=True, description='Last name'),
-        'ssn': fields.String(required=True, description='Social Security Number'),
         'birth_date': fields.String(required=True, description='Date of Birth'),
         'address': fields.String(required=True, description='Address'),
         'annual_income': fields.Float(required=True, description='Annual Income'),
@@ -82,56 +84,30 @@ class CreditScore(Resource):
     @ns.marshal_with(customer_model)
     def post(self):
         data = api.payload
-        customer = Customer.query.filter_by(ssn=data['ssn']).first()
-        if customer:
-            # Existing customer handling
-            # Calculate the proposed new total loan amount
-            proposed_total_loan = customer.total_loan_amount + data['loan_amount']
-            annual_income = data['annual_income']
-            
-            # Check if the new total exceeds the max loan amount
-            if proposed_total_loan > customer.max_loan:
-                return {"message": "Loan amount request exceeds your loan limit."}, 400
-
-            # Update the customer's total loan amount
-            customer.total_loan_amount = proposed_total_loan
-            customer.annual_income = annual_income
-            
-            # Update database entry
-            db.session.commit()
-
-            return customer.to_dict(), 200
-            #add the new totla to the existing total of loan ammount
-            # this would be done using the exsiting apr and the given formual
-            # total_loan_amount = (annual_income * 0.1 * 3) + downpayment
-            # if this excisted the amount then reject the loan
-
-            # maybe monthly paymenty  should be separated  
-        else:
-            credit_score = random.choice(credit_scores)
-            apr = determine_apr(credit_score)
-            # Calculate max loan
-            max_loan = calculate_max_loan(data['annual_income'])
-            if data['loan_amount'] > max_loan:
-                return {"message": "Loan amount request exceeds your loan limit."}, 400
-            new_customer = Customer(
-                first_name=data['first_name'],
-                last_name=data['last_name'],
-                ssn=data['ssn'],
-                birth_date=data['birth_date'],
-                address=data['address'],
-                credit_score=credit_score,
-                apr=apr,
-                annual_income=data['annual_income'],
-                total_loan_amount=data['loan_amount'],
-                #if this doesn't woprk reject the loan
-                #monthly payment = (loan amount * 1+apr) / 36
-                max_loan=max_loan
-            )
-            db.session.add(new_customer)
-            db.session.commit()
-            #assuamgin i can call a class or change the class infor a function
-            return new_customer.to_dict(), 201
+        credit_score = random.choice(credit_scores)
+        apr = determine_apr(credit_score)
+        # Calculate max loan
+        max_loan = calculate_max_loan(data['annual_income'])
+        if data['loan_amount'] > max_loan:
+            return {"message": "Loan amount request exceeds your loan limit."}, 400
+        new_customer = Customer(
+            first_name=data['first_name'],
+            last_name=data['last_name'],
+            birth_date=data['birth_date'],
+            address=data['address'],
+            credit_score=credit_score,
+            apr=apr,
+            annual_income=data['annual_income'],
+            total_loan_amount=data['loan_amount'],
+            monthly_payment=calculate_monthly_payment(data['loan_amount'], apr),
+            #if this doesn't woprk reject the loan
+            #monthly payment = (loan amount * 1+apr) / 36
+            max_loan=max_loan
+        )
+        db.session.add(new_customer)
+        db.session.commit()
+        #assuamgin i can call a class or change the class infor a function
+        return new_customer.to_dict(), 201
 
 @ns.route('/get-customer')
 class GetCustomer(Resource):
@@ -156,7 +132,6 @@ class GetCustomer(Resource):
 #add a new endpoint for payments
 
 @ns.route('/loan-info')
-@ns.param('customer_id', 'Customer ID')
 class LoanInfoResource(Resource):
     @ns.expect(api.model('LoanInfo', {
         'customer_id': fields.Integer(required=True, description="Customer ID"),
@@ -174,7 +149,7 @@ class LoanInfoResource(Resource):
             # Update the customer's total loan amount
         customer.total_loan_amount = proposed_total_loan
         loan_info = LoanInfo(
-            customer_id=data['customer_id'],
+            customer_id=customer.id,
             requested_amount=data['requested_amount'],
             downpayment=data['downpayment'],
             monthly_payment=calculate_monthly_payment(data['requested_amount'], customer.apr),# customer.apr
@@ -183,7 +158,7 @@ class LoanInfoResource(Resource):
         db.session.add(loan_info)
         db.session.commit()
         LoanCustomer_Ids = LoanCustomerIds(
-            customer_id=data['customer_id'],
+            customer_id=customer.id,
             loan_info_id=loan_info.id
         )
         db.session.add(LoanCustomer_Ids)
